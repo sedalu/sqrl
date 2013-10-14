@@ -52,28 +52,27 @@ type Identity struct {
 	masterKey []byte // 256-bit master key - useless without XORing with user passcode
 	check     []byte // 128-bit passcode check - must match lower 128-bits of hashed user passcode 
 	salt      []byte //  64-bit salt
+	n, r, p   int
 }
 
-type Client struct {
-	id *Identity
+func NewIdentity(passcode []byte) *Identity {
+	id := new(Identity)
+	id.n, id.r, id.p = 16384, 8, 1
+
+	// Generate new 256-bit master id
+	// masterId := cryptoRand(32)
+
+	// Generate new 64-bit salt
+	id.salt = cryptoRand(8)
+	
+	// Generate new 128-bit passcode check
+
+	// Generate new 256-bit masster key
+
+	return id
 }
 
-func NewClient() *Client {
-	client := new(Client)
-	client.id = new(Identity)
-
-	// Generate a new master key
-	// client.generateMasterKey()
-
-	// Generate a new salt
-	client.id.salt = cryptoRand(8) // 64-bit salt
-
-	// Generate a new check
-
-	return client
-}
-
-func (this *Client) ExportMasterKey(passcode []byte) []byte {
+func (this *Identity) ExportMasterKey(passcode []byte) []byte {
 	// Get SQRL masterID
 	// masterId, err := this.masterID(passcode)
 
@@ -86,7 +85,7 @@ func (this *Client) ExportMasterKey(passcode []byte) []byte {
 	return nil
 }
 
-func (this *Client) ChangePasscode(passcode []byte) {
+func (this *Identity) ChangePasscode(passcode []byte) {
 	// Get SQRL masterID
 	// masterId, err := this.masterID(passcode)
 
@@ -97,6 +96,16 @@ func (this *Client) ChangePasscode(passcode []byte) {
 	// STEP 7: XOR the original master key with the SCrypt result from STEP 5 to create the new master identity key
 	// Return a new SQRLIdentity with the new password salt, password verify, and master identity key
 	// Note: the password is not permanently changed until this new identity object is written over the old identity on disk
+}
+
+type Client struct {
+	id *Identity
+}
+
+func NewClient() *Client {
+	client := new(Client)
+	client.id = new(Identity)
+	return client
 }
 
 func (this *Client) Authenticate(siteURL string, passcode []byte, options Option) (request *http.Request, err error) {
@@ -148,25 +157,23 @@ func (this *Client) masterID(passcode []byte) (masterId []byte, err error) {
 	// TODO Refactor steps into separate functions
 	// STEP 1: Scrypt the current password + passwordSalt
 	// This is the expensive operation and its parameters should be tuned so that this operation takes between 1-2 seconds to perform.
-	N, r, p, keyLen := 16384, 8, 1, 32
-	userkey, err := scrypt.Key(passcode, this.id.salt, N, r, p, keyLen)
+	/*N, r, p,*/ keyLen := /*16384, 8, 1,*/ 32
+	userKey, err := scrypt.Key(passcode, this.id.salt, this.id.n, this.id.r, this.id.p, keyLen)
 
 	if err != nil {
 		return
 	}
 
-	// STEP 2: Check the sha256 hash of the result from STEP 1 verse the current stored passwordVerify value.
-	h := sha256.New()
-	h.Write(userkey)
-	hashcode := h.Sum(nil)
+	// STEP 2: Check the sha256 hash of the result from STEP 1 verse the id.check value.
+	hashcode := hashKey(userKey)
 
 	if subtle.ConstantTimeCompare(this.id.check, hashcode) != 0 {
 		// Passcode didn't match
 		return
 	}
 
-	// STEP 3: XOR the master identity key from the SQRLIdentity with the result from STEP 1 to create the original master key
-	if len(this.id.masterKey) != 32 || len(userkey) != 32 {
+	// STEP 3: XOR the master identity key from the Identity with the result from STEP 1 to create the original master key
+	if len(this.id.masterKey) != 32 || len(userKey) != 32 {
 		// this.masterKey and userkey are not of equal length
 		return
 	}
@@ -174,13 +181,31 @@ func (this *Client) masterID(passcode []byte) (masterId []byte, err error) {
 	subtle.ConstantTimeCopy(1, masterId, this.id.masterKey)
 
 	for i, _ := range masterId {
-		masterId[i] ^= userkey[i]
+		masterId[i] ^= userKey[i]
 	}
 
 	return
 }
 
 //////////////////////// HELPER FUNCTIONS ////////////////////////
+
+func hashKey(key []byte) []byte {
+	h := sha256.New()
+	h.Write(key)
+	return h.Sum(nil)
+}
+
+/*
+func generateUserKey(passcode, salt []byte, N, r, p, keyLen int) (userKey []byte, err error) {
+	userKey, err = scrypt.Key(passcode, salt, N, r, p, keyLen)
+
+	if err != nil {
+		return
+	}
+
+	return
+}
+*/
 
 func generateSiteId(masterId []byte, siteURL string) (siteId [64]byte, err error) {
 	// HMACSHA-256 masterId with the host from siteURL
