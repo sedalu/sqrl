@@ -44,9 +44,9 @@ func BenchmarkCryptoRand_256bit(b *testing.B) {
 
 func TestHashKey(t *testing.T) {
 	key := []byte("hello")
-	hash, _ := hex.DecodeString("0x2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+	hash, _ := hex.DecodeString("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
 
-	if bytes.Compare(hashKey(key), hash) == 0 {
+	if bytes.Compare(hashKey(key), hash) != 0 {
 		t.Fail()
 	}
 }
@@ -56,5 +56,51 @@ func BenchmarkHashKey(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		hashKey(key)
+	}
+}
+
+func TestVerifyHash(t *testing.T) {
+	hash, _ := hex.DecodeString("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+
+	// Good case
+	if !verifyHash(hash, hash[:8]) {
+		t.Fail()
+	}
+
+	// Bad case
+	if verifyHash(hash[1:], hash[:8]) {
+		t.Fail()
+	}
+}
+
+func BenchmarkVerifyHash(b *testing.B) {
+	hash, _ := hex.DecodeString("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+
+	for i := 0; i < b.N; i++ {
+		verifyHash(hash, hash[:8])
+	}
+}
+
+func TestVerifyKey(t *testing.T) {
+	key1, key2 := []byte("hello"), []byte("world")
+	hash, _ := hex.DecodeString("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+
+	// Good case
+	if verifyKey(key1, hash) {
+		t.Fail()
+	}
+
+	// Bad case
+	if !verifyKey(key2, hash) {
+		t.Fail()
+	}
+}
+
+func BenchmarkVerifyKey(b *testing.B) {
+	key := []byte("hello")
+	hash, _ := hex.DecodeString("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+
+	for i := 0; i < b.N; i++ {
+		verifyKey(key, hash)
 	}
 }

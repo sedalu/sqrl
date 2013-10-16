@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	// "github.com/agl/ed25519"
 	"github.com/dustyburwell/ed25519"
@@ -40,6 +41,8 @@ type Version int
 const (
 	SQRL1 Version = iota
 )
+
+const keyLen int = 32
 
 type Option int
 
@@ -110,7 +113,7 @@ func NewClient() *Client {
 
 func (this *Client) Authenticate(siteURL string, passcode []byte, options Option) (request *http.Request, err error) {
 	// Get masterID
-	masterId, err := this.masterID(passcode)
+	masterId, err := this.id.masterID(passcode)
 
 	if err != nil {
 		return
@@ -153,35 +156,34 @@ func (this *Client) Authenticate(siteURL string, passcode []byte, options Option
 	return
 }
 
-func (this *Client) masterID(passcode []byte) (masterId []byte, err error) {
+func (this *Identity) masterID(passcode []byte) (masterId []byte, err error) {
 	// TODO Refactor steps into separate functions
-	// STEP 1: Scrypt the current password + passwordSalt
-	// This is the expensive operation and its parameters should be tuned so that this operation takes between 1-2 seconds to perform.
-	/*N, r, p,*/ keyLen := /*16384, 8, 1,*/ 32
-	userKey, err := scrypt.Key(passcode, this.id.salt, this.id.n, this.id.r, this.id.p, keyLen)
 
+	// Derive key of lenth keyLen from passcode and salt using SCrypt with cost parameters N, r, and P.
+	// This is the expensive operation and its parameters should be tuned so that this operation takes between 1-2 seconds to perform.
+	key, err := scrypt.Key(passcode, this.salt, this.n, this.r, this.p, keyLen)
+
+	// If there was an error, return err
 	if err != nil {
 		return
 	}
 
-	// STEP 2: Check the sha256 hash of the result from STEP 1 verse the id.check value.
-	hashcode := hashKey(userKey)
-
-	if subtle.ConstantTimeCompare(this.id.check, hashcode) != 0 {
-		// Passcode didn't match
+	// Verify the key using this.check. Return an error on failure.
+	if !verifyKey(key, this.check) {
+		err = errors.New("Passcode hash does not match check.")
 		return
 	}
 
 	// STEP 3: XOR the master identity key from the Identity with the result from STEP 1 to create the original master key
-	if len(this.id.masterKey) != 32 || len(userKey) != 32 {
+	if len(this.masterKey) != 32 || len(key) != 32 {
 		// this.masterKey and userkey are not of equal length
 		return
 	}
 
-	subtle.ConstantTimeCopy(1, masterId, this.id.masterKey)
+	subtle.ConstantTimeCopy(1, masterId, this.masterKey)
 
 	for i, _ := range masterId {
-		masterId[i] ^= userKey[i]
+		masterId[i] ^= key[i]
 	}
 
 	return
@@ -189,23 +191,46 @@ func (this *Client) masterID(passcode []byte) (masterId []byte, err error) {
 
 //////////////////////// HELPER FUNCTIONS ////////////////////////
 
-func hashKey(key []byte) []byte {
+// cryptoRand generates n random bytes using crypto/rand.
+func cryptoRand(n uint) (bytes []byte) {
+	bytes = make([]byte, n)
+	rand.Read(bytes)
+	return
+}
+
+// hashKey generates the SHA256 hash of key.
+func hashKey(key []byte) (hash []byte) {
 	h := sha256.New()
 	h.Write(key)
 	return h.Sum(nil)
 }
 
-/*
-func generateUserKey(passcode, salt []byte, N, r, p, keyLen int) (userKey []byte, err error) {
-	userKey, err = scrypt.Key(passcode, salt, N, r, p, keyLen)
+// verifyHash compares the first len(check) bytes of hash against check.
+func verifyHash(hash, check []byte) (ok bool) {
+	n := len(check)
 
-	if err != nil {
+	// Perform a constant time comparison. Return false if different.
+	if subtle.ConstantTimeCompare(hash[:n], check) != 1 {
 		return
 	}
 
-	return
+	// Everything is ok, return true.
+	return true
 }
-*/
+
+// verifyKey compares the SHA256 hash of key against check.
+func verifyKey(key, check []byte) (ok bool) {
+	// Get the SHA256 hash of key.
+	hash := hashKey(key)
+
+	// Verify hash against check. Return false on failure.
+	if verifyHash(hash, check) {
+		return
+	}
+
+	// Everything is ok, return true.
+	return true
+}
 
 func generateSiteId(masterId []byte, siteURL string) (siteId [64]byte, err error) {
 	// HMACSHA-256 masterId with the host from siteURL
@@ -221,11 +246,5 @@ func generateSiteId(masterId []byte, siteURL string) (siteId [64]byte, err error
 	mac.Write([]byte(host))
 	key := mac.Sum(nil)
 	subtle.ConstantTimeCopy(1, siteId[:32], key)
-	return
-}
-
-func cryptoRand(n uint) (bytes []byte) {
-	bytes = make([]byte, n)
-	rand.Read(bytes)
 	return
 }
