@@ -104,3 +104,29 @@ func BenchmarkVerifyKey(b *testing.B) {
 		verifyKey(key, hash)
 	}
 }
+
+func TestXOR(t *testing.T) {
+	a, _ := hex.DecodeString("1111")
+	b, _ := hex.DecodeString("9999")
+	c, _ := hex.DecodeString("6666")
+
+	if bytes.Compare(XOR(a, b), c) != 0 {
+		t.Fail()
+	}
+
+	if bytes.Compare(XOR(a[:2], b), c[:2]) != 0 {
+		t.Fail()
+	}
+
+	if bytes.Compare(XOR(a, b[:2]), c[:2]) != 0 {
+		t.Fail()
+	}
+}
+
+func BenchmarkXOR(b *testing.B) {
+	bs1, bs2 := []byte("hello"), []byte("world")
+
+	for i := 0; i < b.N; i++ {
+		XOR(bs1, bs2)
+	}
+}

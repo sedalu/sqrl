@@ -42,7 +42,9 @@ const (
 	SQRL1 Version = iota
 )
 
-const keyLen int = 32
+const keyLen   int = 32
+const checkLen int = 16
+const saltLen  int = 8
 
 type Option int
 
@@ -174,16 +176,11 @@ func (this *Identity) masterID(passcode []byte) (masterId []byte, err error) {
 		return
 	}
 
-	// STEP 3: XOR the master identity key from the Identity with the result from STEP 1 to create the original master key
-	if len(this.masterKey) != 32 || len(key) != 32 {
-		// this.masterKey and userkey are not of equal length
-		return
-	}
+	// XOR this.masterKey and key
+	masterId = XOR(this.masterKey, key)
 
-	subtle.ConstantTimeCopy(1, masterId, this.masterKey)
-
-	for i, _ := range masterId {
-		masterId[i] ^= key[i]
+	if len(masterId) != keyLen {
+		err = errors.New("masterId not the correct length.")
 	}
 
 	return
@@ -191,21 +188,21 @@ func (this *Identity) masterID(passcode []byte) (masterId []byte, err error) {
 
 //////////////////////// HELPER FUNCTIONS ////////////////////////
 
-// cryptoRand generates n random bytes using crypto/rand.
+// cryptoRand returns n random bytes using crypto/rand.
 func cryptoRand(n uint) (bytes []byte) {
 	bytes = make([]byte, n)
 	rand.Read(bytes)
 	return
 }
 
-// hashKey generates the SHA256 hash of key.
-func hashKey(key []byte) (hash []byte) {
+// hashKey returns the SHA256 hash of key.
+func hashKey(key []byte) []byte {
 	h := sha256.New()
 	h.Write(key)
 	return h.Sum(nil)
 }
 
-// verifyHash compares the first len(check) bytes of hash against check.
+// verifyHash returns true if the first len(check) bytes of hash match check.
 func verifyHash(hash, check []byte) (ok bool) {
 	n := len(check)
 
@@ -230,6 +227,23 @@ func verifyKey(key, check []byte) (ok bool) {
 
 	// Everything is ok, return true.
 	return true
+}
+
+// XOR returns a new byte slice consisting of the n bytes of a XORed with b, where n is the smaller of len(a) and len(b).
+func XOR(a, b []byte) []byte {
+	// Fine n
+	n := len(a)
+
+	if n > len(b) {
+		n = len(b)
+	}
+
+	// XOR the first n bytes
+	for i := 0; i < n; i++ {
+		a[i] =^ b[i]
+	}
+
+	return a
 }
 
 func generateSiteId(masterId []byte, siteURL string) (siteId [64]byte, err error) {
