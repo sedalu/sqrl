@@ -2,6 +2,7 @@ package sqrl
 
 import (
 	"bytes"
+	// "crypto/subtle"
 	"encoding/hex"
 	// "fmt"
 	"testing"
@@ -105,28 +106,22 @@ func BenchmarkVerifyKey(b *testing.B) {
 	}
 }
 
-func TestXOR(t *testing.T) {
+func TestXor(t *testing.T) {
 	a, _ := hex.DecodeString("1111")
 	b, _ := hex.DecodeString("9999")
-	c, _ := hex.DecodeString("6666")
+	c, _ := hex.DecodeString("8888")
 
-	if bytes.Compare(XOR(a, b), c) != 0 {
-		t.Fail()
-	}
+	Xor(a, b)
 
-	if bytes.Compare(XOR(a[:2], b), c[:2]) != 0 {
-		t.Fail()
-	}
-
-	if bytes.Compare(XOR(a, b[:2]), c[:2]) != 0 {
+	if bytes.Compare(a, c) != 0 {
 		t.Fail()
 	}
 }
 
-func BenchmarkXOR(b *testing.B) {
+func BenchmarkXor(b *testing.B) {
 	bs1, bs2 := []byte("hello"), []byte("world")
 
 	for i := 0; i < b.N; i++ {
-		XOR(bs1, bs2)
+		Xor(bs1, bs2)
 	}
 }

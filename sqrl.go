@@ -28,11 +28,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	// "github.com/agl/ed25519"
 	"github.com/dustyburwell/ed25519"
 	"net/http"
-	"net/url"
-	"strconv"
+	// "net/url"
+	// "strconv"
 	"strings"
 )
 
@@ -42,10 +41,6 @@ const (
 	SQRL1 Version = iota
 )
 
-const keyLen   int = 32
-const checkLen int = 16
-const saltLen  int = 8
-
 type Option int
 
 const (
@@ -53,137 +48,194 @@ const (
 	Enforce
 )
 
-type Identity struct {
-	masterKey []byte // 256-bit master key - useless without XORing with user passcode
-	check     []byte // 128-bit passcode check - must match lower 128-bits of hashed user passcode 
-	salt      []byte //  64-bit salt
-	n, r, p   int
-}
+const keyLen   int = 32
+const checkLen int = 16
+const saltLen  int = 8
 
-func NewIdentity(passcode []byte) *Identity {
-	id := new(Identity)
-	id.n, id.r, id.p = 16384, 8, 1
-
-	// Generate new 256-bit master id
-	// masterId := cryptoRand(32)
-
-	// Generate new 64-bit salt
-	id.salt = cryptoRand(8)
-	
-	// Generate new 128-bit passcode check
-
-	// Generate new 256-bit masster key
-
-	return id
-}
-
-func (this *Identity) ExportMasterKey(passcode []byte) []byte {
-	// Get SQRL masterID
-	// masterId, err := this.masterID(passcode)
-
-	// TODO Refactor steps into separate functions
-	// STEP 4: Create a new password salt
-	// STEP 5: SCrypt the current password and newPasswordSalt with WAY more difficult SCryptParameters
-	// STEP 6: SHA256 the SCrypt result from STEP 5 to create the new password verifier
-	// STEP 7: XOR the original master key with the SCrypt result from STEP 5 to create the new master identity key
-	// Return a new Identity with the new password salt, password verify, password parameters and master identity key
-	return nil
-}
-
-func (this *Identity) ChangePasscode(passcode []byte) {
-	// Get SQRL masterID
-	// masterId, err := this.masterID(passcode)
-
-	// TODO Refactor steps into separate functions
-	// STEP 4: Create a new password salt
-	// STEP 5: SCrypt the newPassword and newPasswordSalt
-	// STEP 6: SHA256 the SCrypt result from STEP 5 to create the new password verifier
-	// STEP 7: XOR the original master key with the SCrypt result from STEP 5 to create the new master identity key
-	// Return a new SQRLIdentity with the new password salt, password verify, and master identity key
-	// Note: the password is not permanently changed until this new identity object is written over the old identity on disk
-}
+// Key stores a 256-bit cryptographic key
+type Key [keyLen]byte
 
 type Client struct {
-	id *Identity
+	
 }
 
-func NewClient() *Client {
-	client := new(Client)
-	client.id = new(Identity)
-	return client
-}
+// Authenticate
+func (this *Client) Authenticate(id *Identity, password, siteUrl string, options Option) (request *http.Request, err error) {
+	// Get the domain.
+	domain := "example.com"
 
-func (this *Client) Authenticate(siteURL string, passcode []byte, options Option) (request *http.Request, err error) {
-	// Get masterID
-	masterId, err := this.id.masterID(passcode)
+	// Get the private key for the domain.
+	key, err := id.GenerateKey(domain, password)
 
 	if err != nil {
 		return
 	}
 
-	// Get siteID
-	siteId, err := generateSiteId(masterId, siteURL)
+	// Build the response URL.
+	// 1. Challenge URL without the scheme
+	url := strings.SplitN(siteUrl, "://", 2)[1]
 
-	if err != nil {
-		return
-	}
+	// 2. Add sqrlver
+	url += fmt.Sprintf("&%s=%s", "sqrlver", SQRL1)
 
-	// STEP 5: Synthesize a public key by using the result from STEP 4
-	// Alternative:
-	//	privateKeyBuf := bytes.NewBuffer(siteId)
-	//	sqrlkey, _, err := ed25519.GenerateKey(privateKeyBuf)
-	publicKey := ed25519.GeneratePublicKey(&siteId)[:]
-	sqrlkey := base64.URLEncoding.EncodeToString(publicKey)
-	sqrlkey = strings.TrimRight(sqrlkey, "=")
-
-	// STEP 6: Built the signable URL
-	sqrlURL := siteURL
-	sqrlURL += fmt.Sprintf("&%s=%s", "sqrlver", SQRL1)
-
+	// 3. Add sqrlopt
 	if options != None {
-		sqrlURL += fmt.Sprintf("&%s=%s", "sqrlopt", "")
+		var opts []string
+
+		if options & Enforce == Enforce {
+			opts = append(opts, "enforce")
+		}
+
+		url += fmt.Sprintf("&%s=%s", "sqrlopt", strings.Join(opts, ","))
 	}
 
-	sqrlURL += fmt.Sprintf("&%s=%s", "sqrlkey", sqrlkey)
+	// 4. Add sqrlkey
+	sqrlkey := base64.URLEncoding.EncodeToString(key.PublicKey[:])
+	sqrlkey = strings.TrimRight(sqrlkey, "=")
+	url += fmt.Sprintf("&%s=%s", "sqrlkey", sqrlkey)
 
-	// STEP 7: Sign the signable URL with the private key from STEP 4
-	sig := ed25519.Sign(&siteId, []byte(sqrlURL))[:]
-	sqrlsig := base64.URLEncoding.EncodeToString(sig)
-	sqrlsig = strings.TrimRight(sqrlsig, "=")
+	//  5. Add sqrlold
 
-	// Return authentication object containing all the outputs which are to be sent to the server
-	body := bytes.NewBufferString(fmt.Sprintf("&%s=%s", "sqrlsig", sqrlsig))
-	request, err = http.NewRequest("POST", sqrlURL, body)
-	// request.RequestURI = siteURL
+	// Sign the response URL
+	sig := key.Sign([]byte(url))
+
+	// Build the response body
+	body := bytes.NewBufferString("sqrlsig=")
+	body.Write(sig[:])
+
+	request, err = http.NewRequest("POST", url, body)
 	return
 }
 
-func (this *Identity) masterID(passcode []byte) (masterId []byte, err error) {
-	// TODO Refactor steps into separate functions
+type Identity struct {
+	Key
+	Check [checkLen]byte
+	Salt [saltLen]byte
+	N, R, P int
+}
 
-	// Derive key of lenth keyLen from passcode and salt using SCrypt with cost parameters N, r, and P.
-	// This is the expensive operation and its parameters should be tuned so that this operation takes between 1-2 seconds to perform.
-	key, err := scrypt.Key(passcode, this.salt, this.n, this.r, this.p, keyLen)
+// func NewIdentity(password string) *Identity {
+// 	id := new(Identity)
+// 	id.N, id.R, id.P = 16384, 8, 1
+// 
+// 	// Generate new 256-bit master key
+// 	// key := cryptoRand(32)
+// 
+// 	// Generate new 64-bit salt
+// 	// salt := cryptoRand(8)
+// 	
+// 	// Generate new 128-bit password check
+// 
+// 	// Generate new 256-bit key
+// 
+// 	return id
+// }
 
-	// If there was an error, return err
+func (this *Identity) recoverMasterKey(password string) (key *[keyLen]byte, err error) {
+	// Derive userkey using password and this.Salt.
+	userkey, keyhash, err := DeriveKey([]byte(password), this.Salt[:], this.N, this.R, this.P, keyLen)
+
 	if err != nil {
 		return
 	}
 
-	// Verify the key using this.check. Return an error on failure.
-	if !verifyKey(key, this.check) {
-		err = errors.New("Passcode hash does not match check.")
+	// Verify userkey by comparing keyhash to this.Check.
+	n := len(this.Check)
+
+	if subtle.ConstantTimeCompare(keyhash[:n], this.Check[:]) != 1 {
+		err = errors.New("--")
 		return
 	}
 
-	// XOR this.masterKey and key
-	masterId = XOR(this.masterKey, key)
+	subtle.ConstantTimeCopy(1, key[:], userkey)
+	Xor(userkey, this.Key[:])
+	return
+}
 
-	if len(masterId) != keyLen {
-		err = errors.New("masterId not the correct length.")
+// ChangePassword
+func (this *Identity) ChangePassword(old, new string) (ok bool, err error) {
+	// Recover master key.
+	master, err := this.recoverMasterKey(old)
+
+	if err != nil {
+		return
 	}
 
+	// Generate salt.
+	salt := make([]byte, 8)
+	rand.Read(salt)
+
+	// Derive new userkey
+	userkey, keyhash, err := DeriveKey([]byte(new), salt, this.N, this.R, this.P, keyLen)
+
+	if err != nil {
+		return
+	}
+
+	// Generate key by XORing master and userkey.
+	key := make([]byte, keyLen)
+	subtle.ConstantTimeCopy(1, key[:], userkey)
+	Xor(key, master[:])
+
+	// Change the stored values.
+ 	subtle.ConstantTimeCopy(1, this.Key[:keyLen], key[:keyLen])
+ 	subtle.ConstantTimeCopy(1, this.Check[:16], keyhash[:16])
+ 	subtle.ConstantTimeCopy(1, this.Salt[:8], salt[:8])
 	return
+}
+
+func (this *Identity) GenerateKey(domain, password string) (key *PrivateKey, err error) {
+	// Recover master key.
+	master, err := this.recoverMasterKey(password)
+
+	if err != nil {
+		return
+	}
+
+	// HMAC-SHA256 using master as the key and domain as the message to generate the 256-bit private key.
+ 	mac := hmac.New(sha256.New, master[:])
+	mac.Write([]byte(domain))
+	bytes := mac.Sum(nil)
+
+	if len(bytes) != keyLen {
+		err = errors.New("--")
+		return
+	}
+
+ 	subtle.ConstantTimeCopy(1, key.Key[:keyLen], bytes[:keyLen])
+
+	// Generate the corresponding 256-bit public key.
+	key.generatePublicKey()
+	return
+}
+
+// PrivateKey represents an Ed25519 private key.
+type PrivateKey struct {
+	Key
+	PublicKey
+}
+
+// Sign hash msg and returns the signed hash
+func (this *PrivateKey) Sign(msg []byte) (sig [64]byte) {
+	var key *[ed25519.PrivateKeySize]byte
+	subtle.ConstantTimeCopy(1, key[:32], this.Key[:])
+	return *ed25519.Sign(key, msg)
+}
+
+func (this *PrivateKey) generatePublicKey() {
+	var key *[ed25519.PrivateKeySize]byte
+	subtle.ConstantTimeCopy(1, key[:32], this.Key[:])
+	this.PublicKey = PublicKey(*ed25519.GeneratePublicKey(key))
+}
+
+// PublicKey represents an Ed25519 public key.
+type PublicKey Key
+
+// Verify verifies the signature in sig
+func (this *PublicKey) Verify(msg []byte, sig [64]byte) bool {
+	var key *[ed25519.PublicKeySize]byte
+	subtle.ConstantTimeCopy(1, key[:32], this[:])
+	return ed25519.Verify(key, msg, &sig)
 }
 
 //////////////////////// HELPER FUNCTIONS ////////////////////////
@@ -229,36 +281,25 @@ func verifyKey(key, check []byte) (ok bool) {
 	return true
 }
 
-// XOR returns a new byte slice consisting of the n bytes of a XORed with b, where n is the smaller of len(a) and len(b).
-func XOR(a, b []byte) []byte {
-	// Fine n
-	n := len(a)
-
-	if n > len(b) {
-		n = len(b)
+// Xor sets a equal to a XOR b.
+func Xor(a, b []byte) {
+	for i := 0; i < len(a); i++ {
+		a[i] ^= b[i]
 	}
-
-	// XOR the first n bytes
-	for i := 0; i < n; i++ {
-		a[i] =^ b[i]
-	}
-
-	return a
 }
 
-func generateSiteId(masterId []byte, siteURL string) (siteId [64]byte, err error) {
-	// HMACSHA-256 masterId with the host from siteURL
-	url, _ := url.Parse(siteURL)
-	host := url.Host
-	d, _ := strconv.Atoi(url.Query().Get("d"))
+func DeriveKey(password, salt []byte, N, r, p, n int) (key, hash []byte, err error) {
+	// Derive key using password and salt.
+	key, err = scrypt.Key(password, salt, N, r, p, n)
 
-	if d > 1 && d <= len(url.Path) {
-		host += url.Path[:d]
+	if err != nil {
+		return
 	}
 
-	mac := hmac.New(sha256.New, masterId)
-	mac.Write([]byte(host))
-	key := mac.Sum(nil)
-	subtle.ConstantTimeCopy(1, siteId[:32], key)
+	// Calculate the SHA256 hash of userkey.
+	sha := sha256.New()
+	sha.Write(key)
+	hash = sha.Sum(nil)
+
 	return
 }
