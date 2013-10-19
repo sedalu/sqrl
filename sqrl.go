@@ -131,7 +131,7 @@ type Identity struct {
 // 	return id
 // }
 
-func (this *Identity) recoverMasterKey(password string) (key *[keyLen]byte, err error) {
+func (this *Identity) recoverMasterKey(password string) (key *Key, err error) {
 	// Derive userkey using password and this.Salt.
 	userkey, keyhash, err := DeriveKey([]byte(password), this.Salt[:], this.N, this.R, this.P, keyLen)
 
@@ -148,7 +148,7 @@ func (this *Identity) recoverMasterKey(password string) (key *[keyLen]byte, err 
 	}
 
 	subtle.ConstantTimeCopy(1, key[:], userkey)
-	Xor(userkey, this.Key[:])
+	Xor(key[:], this.Key[:])
 	return
 }
 
