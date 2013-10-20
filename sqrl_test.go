@@ -43,6 +43,7 @@ func BenchmarkCryptoRand_256bit(b *testing.B) {
 	}
 }
 
+/*
 func TestHashKey(t *testing.T) {
 	key := []byte("hello")
 	hash, _ := hex.DecodeString("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
@@ -105,6 +106,7 @@ func BenchmarkVerifyKey(b *testing.B) {
 		verifyKey(key, hash)
 	}
 }
+*/
 
 func TestXor(t *testing.T) {
 	a, _ := hex.DecodeString("1111")

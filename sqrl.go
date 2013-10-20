@@ -52,9 +52,6 @@ const keyLen   int = 32
 const checkLen int = 16
 const saltLen  int = 8
 
-// Key stores a 256-bit cryptographic key
-type Key [keyLen]byte
-
 type Client struct {
 	
 }
@@ -65,7 +62,8 @@ func (this *Client) Authenticate(id *Identity, password, siteUrl string, options
 	domain := "example.com"
 
 	// Get the private key for the domain.
-	key, err := id.GenerateKey(domain, password)
+	masterKey, err := id.recoverMasterKey(password)
+	key := masterKey.DomainKey(domain)
 
 	if err != nil {
 		return
@@ -90,7 +88,7 @@ func (this *Client) Authenticate(id *Identity, password, siteUrl string, options
 	}
 
 	// 4. Add sqrlkey
-	sqrlkey := base64.URLEncoding.EncodeToString(key.PublicKey[:])
+	sqrlkey := base64.URLEncoding.EncodeToString(key.PublicKey()[:])
 	sqrlkey = strings.TrimRight(sqrlkey, "=")
 	url += fmt.Sprintf("&%s=%s", "sqrlkey", sqrlkey)
 
@@ -108,7 +106,7 @@ func (this *Client) Authenticate(id *Identity, password, siteUrl string, options
 }
 
 type Identity struct {
-	Key
+	*Key
 	Check [checkLen]byte
 	Salt [saltLen]byte
 	N, R, P int
@@ -132,24 +130,29 @@ type Identity struct {
 // }
 
 func (this *Identity) recoverMasterKey(password string) (key *Key, err error) {
-	// Derive userkey using password and this.Salt.
-	userkey, keyhash, err := DeriveKey([]byte(password), this.Salt[:], this.N, this.R, this.P, keyLen)
+	key, err = DeriveKey([]byte(password), this.Salt[:], this.N, this.R, this.P, keyLen)
 
 	if err != nil {
 		return
 	}
 
-	// Verify userkey by comparing keyhash to this.Check.
-	n := len(this.Check)
-
-	if subtle.ConstantTimeCompare(keyhash[:n], this.Check[:]) != 1 {
+	if !this.Authenticate(key) {
 		err = errors.New("--")
 		return
 	}
 
-	subtle.ConstantTimeCopy(1, key[:], userkey)
-	Xor(key[:], this.Key[:])
+	key.Xor(this.Key)
 	return
+}
+
+func (this *Identity) Authenticate(key *Key) bool {
+	hash := key.Hash()
+
+	if subtle.ConstantTimeCompare(hash[:checkLen], this.Check[:]) != 1 {
+		return false
+	}
+
+	return true
 }
 
 // ChangePassword
@@ -161,124 +164,81 @@ func (this *Identity) ChangePassword(old, new string) (ok bool, err error) {
 		return
 	}
 
-	// Generate salt.
-	salt := make([]byte, 8)
-	rand.Read(salt)
-
-	// Derive new userkey
-	userkey, keyhash, err := DeriveKey([]byte(new), salt, this.N, this.R, this.P, keyLen)
+	salt := cryptoRand(saltLen)
+	key, err := DeriveKey([]byte(new), salt, this.N, this.R, this.P, keyLen)
 
 	if err != nil {
 		return
 	}
 
-	// Generate key by XORing master and userkey.
-	key := make([]byte, keyLen)
-	subtle.ConstantTimeCopy(1, key[:], userkey)
-	Xor(key, master[:])
-
-	// Change the stored values.
+	key.Xor(master)
  	subtle.ConstantTimeCopy(1, this.Key[:keyLen], key[:keyLen])
- 	subtle.ConstantTimeCopy(1, this.Check[:16], keyhash[:16])
+ 	subtle.ConstantTimeCopy(1, this.Check[:16], key.Hash()[:16])
  	subtle.ConstantTimeCopy(1, this.Salt[:8], salt[:8])
 	return
 }
 
-func (this *Identity) GenerateKey(domain, password string) (key *PrivateKey, err error) {
-	// Recover master key.
-	master, err := this.recoverMasterKey(password)
+// Signature represents a 512-bit cryptographic signature.
+type Signature [64]byte
 
-	if err != nil {
-		return
-	}
+// Key represents a 256-bit cryptographic key.
+type Key [keyLen]byte
 
-	// HMAC-SHA256 using master as the key and domain as the message to generate the 256-bit private key.
- 	mac := hmac.New(sha256.New, master[:])
+// DomainKey returns the private key for domain.
+// HMAC-SHA256 using k as the key and domain as the message to generate the 256-bit private key.
+func (k *Key) DomainKey(domain string) (key *Key) {
+ 	mac := hmac.New(sha256.New, k[:])
 	mac.Write([]byte(domain))
 	bytes := mac.Sum(nil)
-
-	if len(bytes) != keyLen {
-		err = errors.New("--")
-		return
-	}
-
- 	subtle.ConstantTimeCopy(1, key.Key[:keyLen], bytes[:keyLen])
-
-	// Generate the corresponding 256-bit public key.
-	key.generatePublicKey()
+ 	subtle.ConstantTimeCopy(1, key[:keyLen], bytes[:keyLen])
 	return
 }
 
-// PrivateKey represents an Ed25519 private key.
-type PrivateKey struct {
-	Key
-	PublicKey
+// Hash returns the SHA256 hash
+func (k *Key) Hash() []byte {
+	hash := sha256.New()
+	hash.Write(k[:])
+	return hash.Sum(nil)
 }
 
-// Sign hash msg and returns the signed hash
-func (this *PrivateKey) Sign(msg []byte) (sig [64]byte) {
-	var key *[ed25519.PrivateKeySize]byte
-	subtle.ConstantTimeCopy(1, key[:32], this.Key[:])
-	return *ed25519.Sign(key, msg)
+// PublicKey returns the corresponding public key.
+func (k *Key) PublicKey() *Key {
+	var pk *[ed25519.PrivateKeySize]byte
+	subtle.ConstantTimeCopy(1, pk[:32], k[:])
+	key := Key(*ed25519.GeneratePublicKey(pk))
+	return &key
 }
 
-func (this *PrivateKey) generatePublicKey() {
-	var key *[ed25519.PrivateKeySize]byte
-	subtle.ConstantTimeCopy(1, key[:32], this.Key[:])
-	this.PublicKey = PublicKey(*ed25519.GeneratePublicKey(key))
+// Sign returns the cryptographic signature of the []byte msg.
+func (k *Key) Sign(msg []byte) (sig *Signature) {
+	var pk *[ed25519.PrivateKeySize]byte
+	subtle.ConstantTimeCopy(1, pk[:32], k[:])
+	s := Signature(*ed25519.Sign(pk, msg))
+	return &s
 }
 
-// PublicKey represents an Ed25519 public key.
-type PublicKey Key
+// Verify returns true if the cryptographic signature sig.
+func (k *Key) Verify(msg []byte, sig *Signature) bool {
+	var pk *[ed25519.PublicKeySize]byte
+	subtle.ConstantTimeCopy(1, pk[:32], k[:])
+	// pk := [ed25519.PublicKeySize]byte(*k)
+	s := [ed25519.SignatureSize]byte(*sig)
+	return ed25519.Verify(pk, msg, &s)
+}
 
-// Verify verifies the signature in sig
-func (this *PublicKey) Verify(msg []byte, sig [64]byte) bool {
-	var key *[ed25519.PublicKeySize]byte
-	subtle.ConstantTimeCopy(1, key[:32], this[:])
-	return ed25519.Verify(key, msg, &sig)
+func (k *Key) Xor(key *Key) {
+	for i := 0; i < keyLen; i++ {
+		k[i] ^= key[i]
+	}
 }
 
 //////////////////////// HELPER FUNCTIONS ////////////////////////
 
 // cryptoRand returns n random bytes using crypto/rand.
-func cryptoRand(n uint) (bytes []byte) {
+func cryptoRand(n int) (bytes []byte) {
 	bytes = make([]byte, n)
 	rand.Read(bytes)
 	return
-}
-
-// hashKey returns the SHA256 hash of key.
-func hashKey(key []byte) []byte {
-	h := sha256.New()
-	h.Write(key)
-	return h.Sum(nil)
-}
-
-// verifyHash returns true if the first len(check) bytes of hash match check.
-func verifyHash(hash, check []byte) (ok bool) {
-	n := len(check)
-
-	// Perform a constant time comparison. Return false if different.
-	if subtle.ConstantTimeCompare(hash[:n], check) != 1 {
-		return
-	}
-
-	// Everything is ok, return true.
-	return true
-}
-
-// verifyKey compares the SHA256 hash of key against check.
-func verifyKey(key, check []byte) (ok bool) {
-	// Get the SHA256 hash of key.
-	hash := hashKey(key)
-
-	// Verify hash against check. Return false on failure.
-	if verifyHash(hash, check) {
-		return
-	}
-
-	// Everything is ok, return true.
-	return true
 }
 
 // Xor sets a equal to a XOR b.
@@ -288,18 +248,14 @@ func Xor(a, b []byte) {
 	}
 }
 
-func DeriveKey(password, salt []byte, N, r, p, n int) (key, hash []byte, err error) {
+func DeriveKey(password, salt []byte, N, r, p, n int) (key *Key, err error) {
 	// Derive key using password and salt.
-	key, err = scrypt.Key(password, salt, N, r, p, n)
+	k, err := scrypt.Key(password, salt, N, r, p, n)
 
 	if err != nil {
 		return
 	}
 
-	// Calculate the SHA256 hash of userkey.
-	sha := sha256.New()
-	sha.Write(key)
-	hash = sha.Sum(nil)
-
+	subtle.ConstantTimeCopy(1, key[:], k)
 	return
 }
