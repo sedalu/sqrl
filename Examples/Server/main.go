@@ -11,7 +11,7 @@ import (
 func HelloServer(w http.ResponseWriter, req *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
 	io.WriteString(w, "hello, world!\n")
-	io.WriteString(w, "<a href=\"/qr.png?xyz\">QR Code</a>\n")
+	io.WriteString(w, "<img src=\"/qr.png?xyz\" />\n")
 }
 
 func main() {
