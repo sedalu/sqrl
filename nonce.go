@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 )
 
 type Nonce struct {
@@ -30,7 +31,7 @@ func NewNonce() *Nonce {
 	binary.LittleEndian.PutUint32(aesKey[12:16], rand.Uint32())
 	aesKeyBlockRet, err := aes.NewCipher(aesKey)
 	nonce.aesKeyBlock = aesKeyBlockRet
-	if(err != nil) {
+	if err != nil {
 		fmt.Println(err)	
 	}
 
@@ -52,6 +53,12 @@ func (r *Nonce) Generate(remoteAddr string) string {
 	/*
 		Prepare ipv4 address (32 bits)
 	*/
+	if strings.Contains(remoteAddr, "]") {
+		remoteAddr = strings.Split(remoteAddr, "]")[0]
+		remoteAddr = strings.Replace(remoteAddr, "[", "", -1)
+	} else {
+		remoteAddr = strings.Split(remoteAddr, ":")[0]
+	}
 	ipAddr := []byte(net.ParseIP(remoteAddr))
 	ipv4Addr := ipAddr[len(ipAddr)-4:]
 	copy(nut[0:4], ipv4Addr);
